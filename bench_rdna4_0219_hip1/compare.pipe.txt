@@ -1,0 +1,107 @@
+| Model                         |   Microbatch size | FlashAttention   | Test   |   t/s hip-stream-concurrency |   t/s pr/mmvq-rdna4 |   Speedup |
+|:------------------------------|------------------:|:-----------------|:-------|-----------------------------:|--------------------:|----------:|
+| llama 7B IQ1_S - 1.5625 bpw   |                 1 | Yes              | pp512  |                       143.24 |              146.69 |      1.02 |
+| llama 7B IQ1_S - 1.5625 bpw   |                 2 | Yes              | pp512  |                       241.50 |              241.46 |      1.00 |
+| llama 7B IQ1_S - 1.5625 bpw   |                 4 | Yes              | pp512  |                       395.94 |              395.49 |      1.00 |
+| llama 7B IQ1_S - 1.5625 bpw   |                 8 | Yes              | pp512  |                       515.88 |              516.78 |      1.00 |
+| llama 7B IQ1_S - 1.5625 bpw   |                16 | Yes              | pp512  |                      1055.06 |             1054.59 |      1.00 |
+| llama 7B IQ2_S - 2.5 bpw      |                 1 | Yes              | pp512  |                       104.92 |              105.16 |      1.00 |
+| llama 7B IQ2_S - 2.5 bpw      |                 2 | Yes              | pp512  |                       183.46 |              183.79 |      1.00 |
+| llama 7B IQ2_S - 2.5 bpw      |                 4 | Yes              | pp512  |                       310.87 |              311.32 |      1.00 |
+| llama 7B IQ2_S - 2.5 bpw      |                 8 | Yes              | pp512  |                       428.24 |              428.55 |      1.00 |
+| llama 7B IQ2_S - 2.5 bpw      |                16 | Yes              | pp512  |                       751.96 |              745.15 |      0.99 |
+| llama 7B IQ2_XS - 2.3125 bpw  |                 1 | Yes              | pp512  |                       111.02 |              112.97 |      1.02 |
+| llama 7B IQ2_XS - 2.3125 bpw  |                 2 | Yes              | pp512  |                       187.88 |              187.96 |      1.00 |
+| llama 7B IQ2_XS - 2.3125 bpw  |                 4 | Yes              | pp512  |                       310.83 |              310.76 |      1.00 |
+| llama 7B IQ2_XS - 2.3125 bpw  |                 8 | Yes              | pp512  |                       419.33 |              419.70 |      1.00 |
+| llama 7B IQ2_XS - 2.3125 bpw  |                16 | Yes              | pp512  |                       712.21 |              710.81 |      1.00 |
+| llama 7B IQ2_XXS - 2.0625 bpw |                 1 | Yes              | pp512  |                        97.00 |               98.26 |      1.01 |
+| llama 7B IQ2_XXS - 2.0625 bpw |                 2 | Yes              | pp512  |                       172.58 |              172.33 |      1.00 |
+| llama 7B IQ2_XXS - 2.0625 bpw |                 4 | Yes              | pp512  |                       303.42 |              303.08 |      1.00 |
+| llama 7B IQ2_XXS - 2.0625 bpw |                 8 | Yes              | pp512  |                       400.71 |              400.61 |      1.00 |
+| llama 7B IQ2_XXS - 2.0625 bpw |                16 | Yes              | pp512  |                       893.39 |              893.66 |      1.00 |
+| llama 7B IQ3_S - 3.4375 bpw   |                 1 | Yes              | pp512  |                        88.64 |               88.71 |      1.00 |
+| llama 7B IQ3_S - 3.4375 bpw   |                 2 | Yes              | pp512  |                       165.66 |              165.41 |      1.00 |
+| llama 7B IQ3_S - 3.4375 bpw   |                 4 | Yes              | pp512  |                       297.87 |              297.44 |      1.00 |
+| llama 7B IQ3_S - 3.4375 bpw   |                 8 | Yes              | pp512  |                       407.58 |              406.90 |      1.00 |
+| llama 7B IQ3_S - 3.4375 bpw   |                16 | Yes              | pp512  |                       877.84 |              877.86 |      1.00 |
+| llama 7B IQ3_S mix - 3.66 bpw |                 1 | Yes              | pp512  |                        90.23 |               91.60 |      1.02 |
+| llama 7B IQ3_S mix - 3.66 bpw |                 2 | Yes              | pp512  |                       166.56 |              166.50 |      1.00 |
+| llama 7B IQ3_S mix - 3.66 bpw |                 4 | Yes              | pp512  |                       288.52 |              288.47 |      1.00 |
+| llama 7B IQ3_S mix - 3.66 bpw |                 8 | Yes              | pp512  |                       378.63 |              378.59 |      1.00 |
+| llama 7B IQ3_S mix - 3.66 bpw |                16 | Yes              | pp512  |                       904.70 |              906.42 |      1.00 |
+| llama 7B IQ3_XS - 3.3 bpw     |                 1 | Yes              | pp512  |                        96.00 |               96.19 |      1.00 |
+| llama 7B IQ3_XS - 3.3 bpw     |                 2 | Yes              | pp512  |                       172.65 |              173.30 |      1.00 |
+| llama 7B IQ3_XS - 3.3 bpw     |                 4 | Yes              | pp512  |                       298.39 |              298.77 |      1.00 |
+| llama 7B IQ3_XS - 3.3 bpw     |                 8 | Yes              | pp512  |                       415.49 |              416.06 |      1.00 |
+| llama 7B IQ3_XS - 3.3 bpw     |                16 | Yes              | pp512  |                       951.10 |              951.24 |      1.00 |
+| llama 7B IQ3_XXS - 3.0625 bpw |                 1 | Yes              | pp512  |                       102.13 |              102.09 |      1.00 |
+| llama 7B IQ3_XXS - 3.0625 bpw |                 2 | Yes              | pp512  |                       180.27 |              180.11 |      1.00 |
+| llama 7B IQ3_XXS - 3.0625 bpw |                 4 | Yes              | pp512  |                       301.14 |              300.43 |      1.00 |
+| llama 7B IQ3_XXS - 3.0625 bpw |                 8 | Yes              | pp512  |                       419.49 |              418.74 |      1.00 |
+| llama 7B IQ3_XXS - 3.0625 bpw |                16 | Yes              | pp512  |                       929.73 |              928.37 |      1.00 |
+| llama 7B IQ4_NL - 4.5 bpw     |                 1 | Yes              | pp512  |                       103.40 |              113.86 |      1.10 |
+| llama 7B IQ4_NL - 4.5 bpw     |                 2 | Yes              | pp512  |                       191.20 |              191.29 |      1.00 |
+| llama 7B IQ4_NL - 4.5 bpw     |                 4 | Yes              | pp512  |                       372.33 |              373.35 |      1.00 |
+| llama 7B IQ4_NL - 4.5 bpw     |                 8 | Yes              | pp512  |                       492.79 |              493.95 |      1.00 |
+| llama 7B IQ4_NL - 4.5 bpw     |                16 | Yes              | pp512  |                      1166.88 |             1166.57 |      1.00 |
+| llama 7B IQ4_XS - 4.25 bpw    |                 1 | Yes              | pp512  |                       104.35 |              119.15 |      1.14 |
+| llama 7B IQ4_XS - 4.25 bpw    |                 2 | Yes              | pp512  |                       191.29 |              190.51 |      1.00 |
+| llama 7B IQ4_XS - 4.25 bpw    |                 4 | Yes              | pp512  |                       371.70 |              370.83 |      1.00 |
+| llama 7B IQ4_XS - 4.25 bpw    |                 8 | Yes              | pp512  |                       593.17 |              591.66 |      1.00 |
+| llama 7B IQ4_XS - 4.25 bpw    |                16 | Yes              | pp512  |                      1274.07 |             1274.74 |      1.00 |
+| llama 7B Q2_K_M               |                 1 | Yes              | pp512  |                       103.38 |              106.20 |      1.03 |
+| llama 7B Q2_K_M               |                 2 | Yes              | pp512  |                       174.80 |              174.70 |      1.00 |
+| llama 7B Q2_K_M               |                 4 | Yes              | pp512  |                       271.98 |              271.68 |      1.00 |
+| llama 7B Q2_K_M               |                 8 | Yes              | pp512  |                       338.30 |              337.66 |      1.00 |
+| llama 7B Q2_K_M               |                16 | Yes              | pp512  |                       822.43 |              822.51 |      1.00 |
+| llama 7B Q2_K_S               |                 1 | Yes              | pp512  |                       126.70 |              131.62 |      1.04 |
+| llama 7B Q2_K_S               |                 2 | Yes              | pp512  |                       204.57 |              204.57 |      1.00 |
+| llama 7B Q2_K_S               |                 4 | Yes              | pp512  |                       291.83 |              291.90 |      1.00 |
+| llama 7B Q2_K_S               |                 8 | Yes              | pp512  |                       331.70 |              331.79 |      1.00 |
+| llama 7B Q2_K_S               |                16 | Yes              | pp512  |                       655.22 |              654.37 |      1.00 |
+| llama 7B Q3_K_S               |                 1 | Yes              | pp512  |                       101.31 |              101.47 |      1.00 |
+| llama 7B Q3_K_S               |                 2 | Yes              | pp512  |                       171.73 |              171.57 |      1.00 |
+| llama 7B Q3_K_S               |                 4 | Yes              | pp512  |                       266.82 |              268.01 |      1.00 |
+| llama 7B Q3_K_S               |                 8 | Yes              | pp512  |                       337.55 |              339.45 |      1.01 |
+| llama 7B Q3_K_S               |                16 | Yes              | pp512  |                       888.85 |              889.17 |      1.00 |
+| llama 7B Q4_0                 |                 1 | Yes              | pp512  |                       102.34 |              113.99 |      1.11 |
+| llama 7B Q4_0                 |                 2 | Yes              | pp512  |                       192.60 |              192.50 |      1.00 |
+| llama 7B Q4_0                 |                 4 | Yes              | pp512  |                       373.16 |              373.80 |      1.00 |
+| llama 7B Q4_0                 |                 8 | Yes              | pp512  |                       488.49 |              489.49 |      1.00 |
+| llama 7B Q4_0                 |                16 | Yes              | pp512  |                      1103.41 |             1104.41 |      1.00 |
+| llama 7B Q4_1                 |                 1 | Yes              | pp512  |                        97.31 |              105.96 |      1.09 |
+| llama 7B Q4_1                 |                 2 | Yes              | pp512  |                       182.18 |              182.00 |      1.00 |
+| llama 7B Q4_1                 |                 4 | Yes              | pp512  |                       356.03 |              356.85 |      1.00 |
+| llama 7B Q4_1                 |                 8 | Yes              | pp512  |                       496.44 |              495.82 |      1.00 |
+| llama 7B Q4_1                 |                16 | Yes              | pp512  |                      1132.24 |             1137.02 |      1.00 |
+| llama 7B Q4_K_S               |                 1 | Yes              | pp512  |                       100.75 |              107.30 |      1.06 |
+| llama 7B Q4_K_S               |                 2 | Yes              | pp512  |                       177.83 |              177.96 |      1.00 |
+| llama 7B Q4_K_S               |                 4 | Yes              | pp512  |                       261.32 |              261.37 |      1.00 |
+| llama 7B Q4_K_S               |                 8 | Yes              | pp512  |                       298.76 |              298.81 |      1.00 |
+| llama 7B Q4_K_S               |                16 | Yes              | pp512  |                      1052.61 |             1056.26 |      1.00 |
+| llama 7B Q5_0                 |                 1 | Yes              | pp512  |                        89.24 |               98.30 |      1.10 |
+| llama 7B Q5_0                 |                 2 | Yes              | pp512  |                       167.53 |              167.39 |      1.00 |
+| llama 7B Q5_0                 |                 4 | Yes              | pp512  |                       327.09 |              327.08 |      1.00 |
+| llama 7B Q5_0                 |                 8 | Yes              | pp512  |                       466.76 |              466.58 |      1.00 |
+| llama 7B Q5_0                 |                16 | Yes              | pp512  |                       991.41 |              995.40 |      1.00 |
+| llama 7B Q5_1                 |                 1 | Yes              | pp512  |                        84.96 |               93.21 |      1.10 |
+| llama 7B Q5_1                 |                 2 | Yes              | pp512  |                       161.14 |              160.81 |      1.00 |
+| llama 7B Q5_1                 |                 4 | Yes              | pp512  |                       312.00 |              312.18 |      1.00 |
+| llama 7B Q5_1                 |                 8 | Yes              | pp512  |                       525.72 |              525.71 |      1.00 |
+| llama 7B Q5_1                 |                16 | Yes              | pp512  |                       822.21 |              822.95 |      1.00 |
+| llama 7B Q5_K_S               |                 1 | Yes              | pp512  |                        89.82 |               96.69 |      1.08 |
+| llama 7B Q5_K_S               |                 2 | Yes              | pp512  |                       161.81 |              161.79 |      1.00 |
+| llama 7B Q5_K_S               |                 4 | Yes              | pp512  |                       250.78 |              250.65 |      1.00 |
+| llama 7B Q5_K_S               |                 8 | Yes              | pp512  |                       291.26 |              291.52 |      1.00 |
+| llama 7B Q5_K_S               |                16 | Yes              | pp512  |                      1028.01 |             1028.29 |      1.00 |
+| llama 7B Q6_K                 |                 1 | Yes              | pp512  |                        78.76 |               83.21 |      1.06 |
+| llama 7B Q6_K                 |                 2 | Yes              | pp512  |                       146.26 |              146.01 |      1.00 |
+| llama 7B Q6_K                 |                 4 | Yes              | pp512  |                       254.25 |              253.28 |      1.00 |
+| llama 7B Q6_K                 |                 8 | Yes              | pp512  |                       332.88 |              331.60 |      1.00 |
+| llama 7B Q6_K                 |                16 | Yes              | pp512  |                       811.91 |              811.56 |      1.00 |
+| llama 7B Q8_0                 |                 1 | Yes              | pp512  |                        63.42 |               68.37 |      1.08 |
+| llama 7B Q8_0                 |                 2 | Yes              | pp512  |                       120.81 |              120.87 |      1.00 |
+| llama 7B Q8_0                 |                 4 | Yes              | pp512  |                       237.32 |              237.36 |      1.00 |
+| llama 7B Q8_0                 |                 8 | Yes              | pp512  |                       419.85 |              420.31 |      1.00 |
+| llama 7B Q8_0                 |                16 | Yes              | pp512  |                       852.18 |              852.04 |      1.00 |
