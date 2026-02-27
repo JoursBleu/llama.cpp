@@ -52,27 +52,30 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
                 cur = build_lora_mm(model.layers[il].wqkv, cur);
                 cb(cur, "wqkv", il);
 
-                // split to 2D views, add biases, then reshape to 3D
                 const int64_t n_embd_q   = n_embd_head * n_head;
                 const int64_t n_embd_kgq = n_embd_head * n_head_kv;
+                const size_t es = ggml_element_size(cur);
 
-                ggml_tensor * Qcur_2d = ggml_view_2d(ctx0, cur, n_embd_q,   n_tokens, cur->nb[1], 0);
-                ggml_tensor * Kcur_2d = ggml_view_2d(ctx0, cur, n_embd_kgq, n_tokens, cur->nb[1], ggml_element_size(cur) * n_embd_q);
-                ggml_tensor * Vcur_2d = ggml_view_2d(ctx0, cur, n_embd_kgq, n_tokens, cur->nb[1], ggml_element_size(cur) * (n_embd_q + n_embd_kgq));
+                if (model.layers[il].bq || model.layers[il].bk || model.layers[il].bv) {
+                    // Models with bias: view_2d -> add bias -> reshape_3d
+                    // (ggml_add produces contiguous output, enabling reshape)
+                    ggml_tensor * Qcur_2d = ggml_view_2d(ctx0, cur, n_embd_q,   n_tokens, cur->nb[1], 0);
+                    ggml_tensor * Kcur_2d = ggml_view_2d(ctx0, cur, n_embd_kgq, n_tokens, cur->nb[1], es * n_embd_q);
+                    ggml_tensor * Vcur_2d = ggml_view_2d(ctx0, cur, n_embd_kgq, n_tokens, cur->nb[1], es * (n_embd_q + n_embd_kgq));
 
-                if (model.layers[il].bq) {
-                    Qcur_2d = ggml_add(ctx0, Qcur_2d, model.layers[il].bq);
-                }
-                if (model.layers[il].bk) {
-                    Kcur_2d = ggml_add(ctx0, Kcur_2d, model.layers[il].bk);
-                }
-                if (model.layers[il].bv) {
-                    Vcur_2d = ggml_add(ctx0, Vcur_2d, model.layers[il].bv);
-                }
+                    Qcur_2d = model.layers[il].bq ? ggml_add(ctx0, Qcur_2d, model.layers[il].bq) : ggml_cont(ctx0, Qcur_2d);
+                    Kcur_2d = model.layers[il].bk ? ggml_add(ctx0, Kcur_2d, model.layers[il].bk) : ggml_cont(ctx0, Kcur_2d);
+                    Vcur_2d = model.layers[il].bv ? ggml_add(ctx0, Vcur_2d, model.layers[il].bv) : ggml_cont(ctx0, Vcur_2d);
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur_2d, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur_2d, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur_2d, n_embd_head, n_head_kv, n_tokens);
+                    Qcur = ggml_reshape_3d(ctx0, Qcur_2d, n_embd_head, n_head,    n_tokens);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur_2d, n_embd_head, n_head_kv, n_tokens);
+                    Vcur = ggml_reshape_3d(ctx0, Vcur_2d, n_embd_head, n_head_kv, n_tokens);
+                } else {
+                    // Models without bias: view_3d directly (zero-copy, no ggml_cont needed)
+                    Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, es * n_embd_head, cur->nb[1], 0);
+                    Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, es * n_embd_head, cur->nb[1], es * n_embd_q);
+                    Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, es * n_embd_head, cur->nb[1], es * (n_embd_q + n_embd_kgq));
+                }
 
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
