@@ -41,6 +41,16 @@
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
 #define WARP_SIZE 32
+
+#if defined(GGML_HIP_WAVE64_MODE)
+// Wave64 mode: disable WMMA (incompatible with wave64)
+#ifdef GGML_CUDA_USE_WMMA
+#undef GGML_CUDA_USE_WMMA
+#endif
+#ifdef GGML_HIP_ROCWMMA_FATTN
+#undef GGML_HIP_ROCWMMA_FATTN
+#endif
+#endif // GGML_HIP_WAVE64_MODE
 #define CUDART_HMAX   11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)
 #define CUDART_HMASK  12000 // CUDA 12.0, min. ver. for half2 -> uint mask comparisons
 

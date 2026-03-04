@@ -105,7 +105,7 @@ static __global__ void flash_attn_ext_vec(
 
     const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
-    static_assert(D % (2*WARP_SIZE) == 0, "D not divisible by 2*WARP_SIZE == 64.");
+    static_assert(D % (2*WARP_SIZE) == 0 || D % WARP_SIZE == 0, "D not divisible by WARP_SIZE.");
     constexpr int nwarps = nthreads / WARP_SIZE;
     const int tid = WARP_SIZE*threadIdx.y + threadIdx.x;
     __builtin_assume(tid < nthreads);

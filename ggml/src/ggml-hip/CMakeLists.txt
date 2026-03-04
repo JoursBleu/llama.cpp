@@ -126,6 +126,11 @@ if (NOT GGML_CUDA_FA)
     add_compile_definitions(GGML_CUDA_NO_FA)
 endif()
 
+if (GGML_HIP_WAVE64)
+    set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES
+        COMPILE_FLAGS "-mwavefrontsize64 -DGGML_HIP_WAVE64_MODE")
+endif()
+
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
     target_link_libraries(ggml-hip PRIVATE hip::device)
