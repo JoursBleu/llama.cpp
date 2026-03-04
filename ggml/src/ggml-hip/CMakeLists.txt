@@ -126,6 +126,28 @@ if (NOT GGML_CUDA_FA)
     add_compile_definitions(GGML_CUDA_NO_FA)
 endif()
 
+if (GGML_HIP_WAVE64)
+    # WMMA files: keep wave32
+    file(GLOB WAVE32_SRCS
+        "../ggml-cuda/template-instances/mmq*.cu"
+        "../ggml-cuda/template-instances/mmf*.cu"
+        "../ggml-cuda/template-instances/fattn-mma*.cu"
+        "../ggml-cuda/template-instances/fattn-tile*.cu"
+        "../ggml-cuda/fattn-wmma-f16.cu"
+        "../ggml-cuda/fattn.cu"
+        "../ggml-cuda/mmq.cu"
+        "../ggml-cuda/mmf.cu"
+        "../ggml-cuda/mmid.cu")
+    # All other files: wave64
+    foreach(src ${GGML_SOURCES_ROCM})
+        list(FIND WAVE32_SRCS "${src}" _idx)
+        if (_idx EQUAL -1)
+            set_source_files_properties(${src} PROPERTIES
+                COMPILE_FLAGS "-mwavefrontsize64 -DGGML_HIP_WAVE64_TU")
+        endif()
+    endforeach()
+endif()
+
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
     target_link_libraries(ggml-hip PRIVATE hip::device)

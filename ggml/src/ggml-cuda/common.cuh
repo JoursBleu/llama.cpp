@@ -41,6 +41,93 @@
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
 #define WARP_SIZE 32
+
+#if defined(GGML_HIP_WAVE64_TU)
+// ============================================================
+// Wave64 shuffle workaround for RDNA3/3.5
+// ds_bpermute cannot cross the 32-lane physical boundary in wave64 mode.
+// We override __shfl_*_sync to use physical lane IDs (0..63).
+// ============================================================
+
+static __device__ __forceinline__ int __ggml_flat_tid() {
+    return threadIdx.x + threadIdx.y * blockDim.x
+         + threadIdx.z * blockDim.x * blockDim.y;
+}
+
+template<typename T>
+static __device__ __forceinline__ T __ggml_shfl_xor(T val, int laneMask) {
+    int self   = __ggml_flat_tid() & 63;
+    int target = self ^ laneMask;
+    return __builtin_amdgcn_ds_bpermute(target << 2, val);
+}
+
+template<typename T>
+static __device__ __forceinline__ T __ggml_shfl(T val, int srcLane) {
+    int target = srcLane & 63;
+    return __builtin_amdgcn_ds_bpermute(target << 2, val);
+}
+
+template<typename T>
+static __device__ __forceinline__ T __ggml_shfl_up(T val, unsigned int delta) {
+    int self   = __ggml_flat_tid() & 63;
+    int target = self - delta;
+    if (target < 0) target = self;
+    return __builtin_amdgcn_ds_bpermute(target << 2, val);
+}
+
+template<typename T>
+static __device__ __forceinline__ T __ggml_shfl_down(T val, unsigned int delta) {
+    int self   = __ggml_flat_tid() & 63;
+    int target = self + delta;
+    if (target > 63) target = self;
+    return __builtin_amdgcn_ds_bpermute(target << 2, val);
+}
+
+// half specializations (ds_bpermute works on int, need type punning)
+template<>
+__device__ __forceinline__ half __ggml_shfl_xor<half>(half val, int laneMask) {
+    union { half h; int i; } u;
+    u.h = val; u.i = __ggml_shfl_xor<int>(u.i, laneMask); return u.h;
+}
+template<>
+__device__ __forceinline__ half __ggml_shfl<half>(half val, int srcLane) {
+    union { half h; int i; } u;
+    u.h = val; u.i = __ggml_shfl<int>(u.i, srcLane); return u.h;
+}
+template<>
+__device__ __forceinline__ half __ggml_shfl_up<half>(half val, unsigned int delta) {
+    union { half h; int i; } u;
+    u.h = val; u.i = __ggml_shfl_up<int>(u.i, delta); return u.h;
+}
+template<>
+__device__ __forceinline__ half __ggml_shfl_down<half>(half val, unsigned int delta) {
+    union { half h; int i; } u;
+    u.h = val; u.i = __ggml_shfl_down<int>(u.i, delta); return u.h;
+}
+
+// half2 specializations
+template<>
+__device__ __forceinline__ half2 __ggml_shfl_xor<half2>(half2 val, int laneMask) {
+    union { half2 h2; int i; } u;
+    u.h2 = val; u.i = __ggml_shfl_xor<int>(u.i, laneMask); return u.h2;
+}
+template<>
+__device__ __forceinline__ half2 __ggml_shfl<half2>(half2 val, int srcLane) {
+    union { half2 h2; int i; } u;
+    u.h2 = val; u.i = __ggml_shfl<int>(u.i, srcLane); return u.h2;
+}
+
+// Override macros
+#undef  __shfl_xor_sync
+#define __shfl_xor_sync(mask, val, delta, ...) __ggml_shfl_xor((val), (delta))
+#undef  __shfl_sync
+#define __shfl_sync(mask, val, lane, ...)      __ggml_shfl((val), (lane))
+#undef  __shfl_up_sync
+#define __shfl_up_sync(mask, val, delta, ...)  __ggml_shfl_up((val), (delta))
+#undef  __shfl_down_sync
+#define __shfl_down_sync(mask, val, delta, ...) __ggml_shfl_down((val), (delta))
+
+#endif // GGML_HIP_WAVE64_TU
 #define CUDART_HMAX   11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)
 #define CUDART_HMASK  12000 // CUDA 12.0, min. ver. for half2 -> uint mask comparisons
 
