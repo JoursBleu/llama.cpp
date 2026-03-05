@@ -126,6 +126,31 @@ if (NOT GGML_CUDA_FA)
     add_compile_definitions(GGML_CUDA_NO_FA)
 endif()
 
+if (GGML_HIP_WAVE64)
+    # Wave64 for all HIP source files by default
+    # This benefits memory-bound kernels: mmvq, mmvf, softmax, norm, rope,
+    # convert, fattn-vec (tg fa=1), fattn-tile, etc.
+    #
+    # Only mmq/mmf need wave32 because they use RDNA3 WMMA intrinsics
+    # (__builtin_amdgcn_wmma_*_w32) which require wavefrontsize32.
+    # fattn-mma-f16 kernels are empty stubs on RDNA3 (guard excludes non-RDNA4),
+    # so they safely compile with wave64.
+    file(GLOB WAVE32_WMMA_SRCS
+        "../ggml-cuda/mmq.cu"
+        "../ggml-cuda/mmf.cu"
+        "../ggml-cuda/template-instances/mmq-*.cu"
+        "../ggml-cuda/template-instances/mmf-*.cu")
+
+    foreach(src ${GGML_SOURCES_ROCM})
+        list(FIND WAVE32_WMMA_SRCS "${src}" _idx)
+        if (_idx EQUAL -1)
+            set_source_files_properties(${src} PROPERTIES
+                COMPILE_FLAGS "-mwavefrontsize64")
+        endif()
+    endforeach()
+endif()
+
+
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
     target_link_libraries(ggml-hip PRIVATE hip::device)
