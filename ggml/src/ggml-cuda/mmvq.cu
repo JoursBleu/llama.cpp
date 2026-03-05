@@ -903,7 +903,11 @@ void ggml_cuda_mul_mat_vec_q(
     }
 
     // Float activation fast path: Q4_0, ncols_dst=1, no MUL_MAT_ID
-    if (src0->type == GGML_TYPE_Q4_0 && !ids && ne1 == 1) {
+    // Only for matrices where ne01 <= ne00 (attention Q/K/V/O, MLP down_proj).
+    // Large ne01 (QKV-fused, MLP gate/up) causes occupancy pressure on
+    // bandwidth-limited hardware (APU), hurting performance when combined
+    // with qkv-fusion.
+    if (src0->type == GGML_TYPE_Q4_0 && !ids && ne1 == 1 && ne01 <= ne00) {
         const int64_t s01 = src0->nb[1] / ts_src0;
         const int64_t s1  =  dst->nb[1] / ts_dst;
         const int64_t s02 = src0->nb[2] / ts_src0;
