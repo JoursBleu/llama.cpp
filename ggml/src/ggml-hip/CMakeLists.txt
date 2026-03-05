@@ -126,6 +126,19 @@ if (NOT GGML_CUDA_FA)
     add_compile_definitions(GGML_CUDA_NO_FA)
 endif()
 
+if (GGML_HIP_WAVE64)
+    # Wave64 for memory-bound tg kernels (matmul-vec path)
+    # These kernels are only used during token generation (batch_size=1),
+    # not during prompt processing (which uses WMMA-based mmq/mmf).
+    file(GLOB WAVE64_SRCS
+        "../ggml-cuda/mmvq.cu"
+        "../ggml-cuda/mmvf.cu")
+    foreach(src ${WAVE64_SRCS})
+        set_source_files_properties(${src} PROPERTIES
+            COMPILE_FLAGS "-mwavefrontsize64")
+    endforeach()
+endif()
+
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
     target_link_libraries(ggml-hip PRIVATE hip::device)
