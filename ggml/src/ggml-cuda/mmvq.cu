@@ -500,6 +500,78 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
     GGML_UNUSED(has_fusion);
 }
+
+// ============================================================================
+// F32 activation MMVQ kernel for Q4_0 - fused quantize+matmul
+// Eliminates separate quantize_q8_1 kernel dispatch
+// ============================================================================
+__launch_bounds__(calc_nwarps(1, get_device_table_id()) * ggml_cuda_get_physical_warp_size(), 1)
+static __global__ void mmvq_q4_0_f32act(
+    const void * __restrict__ vx,
+    const float * __restrict__ y_f32,
+    float * __restrict__ dst,
+    const uint32_t ncols_x,
+    const uint32_t stride_row_x,
+    const uint3 nchannels_y_dummy,
+    const uint3 channel_ratio,
+    const uint32_t stride_channel_x,
+    const uint32_t stride_channel_y_f32,
+    const uint32_t stride_channel_dst,
+    const uint3 sample_ratio,
+    const uint32_t stride_sample_x,
+    const uint32_t stride_sample_y_f32,
+    const uint32_t stride_sample_dst) {
+
+    constexpr int qk  = QK4_0;         // 32
+    constexpr int qi  = QI4_0;         // 4
+    constexpr int vdr = VDR_Q4_0_Q8_1_MMVQ;  // 2
+    constexpr mmvq_parameter_table_id table_id = get_device_table_id();
+    constexpr int nwarps = calc_nwarps(1, table_id);
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+
+    const int tid = warp_size * threadIdx.y + threadIdx.x;
+    const int row = blockIdx.x;
+    const int blocks_per_row_x = ncols_x / qk;
+    constexpr int blocks_per_iter = vdr * nwarps * warp_size / qi;
+
+    const uint32_t channel_dst = blockIdx.y;
+    const uint32_t channel_x   = fastdiv(channel_dst, channel_ratio);
+    const uint32_t channel_y   = channel_dst;
+    const uint32_t sample_dst  = blockIdx.z;
+    const uint32_t sample_x    = fastdiv(sample_dst, sample_ratio);
+    const uint32_t sample_y    = sample_dst;
+
+    // f32 activation pointer (strides in f32 elements)
+    const float * y = y_f32 + sample_y * stride_sample_y_f32 + channel_y * stride_channel_y_f32;
+
+    const int kbx_offset = sample_x * stride_sample_x + channel_x * stride_channel_x + row * stride_row_x;
+
+    float tmp = 0.0f;
+
+    for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
+        const int kqs = vdr * (tid % (qi/vdr));
+        tmp += vec_dot_q4_0_f32(vx, y + kbx * qk, kbx_offset + kbx, kqs);
+    }
+
+    // Warp reduction
+    __shared__ float shmem[nwarps > 1 ? nwarps - 1 : 1][warp_size];
+    if (threadIdx.y > 0) {
+        shmem[threadIdx.y - 1][threadIdx.x] = tmp;
+    }
+    __syncthreads();
+    if (threadIdx.y > 0) return;
+
+#pragma unroll
+    for (int l = 0; l < nwarps - 1; l++) {
+        tmp += shmem[l][threadIdx.x];
+    }
+    tmp = warp_reduce_sum<warp_size>(tmp);
+
+    if (threadIdx.x == 0) {
+        dst[sample_dst * stride_sample_dst + channel_dst * stride_channel_dst + row] = tmp;
+    }
+}
+
 static void mul_mat_vec_q_switch_type(
         const void * vx, const ggml_type type_x, const void * vy, const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
         const int ncols_x, const int nrows_x, const int ncols_dst,
@@ -694,6 +766,39 @@ void ggml_cuda_mul_mat_vec_q(
             GGML_ASSERT(ggml_is_contiguously_allocated(src0));
             GGML_ASSERT(!src0->view_src);
             CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
+        }
+    }
+
+    // ---- F32 activation fast path for Q4_0, ncols_dst=1, no fusion, no IDs ----
+    {
+        const int64_t ncols_dst_check = ids ? ne2 : ne1;
+        if (src0->type == GGML_TYPE_Q4_0 && ncols_dst_check == 1 && !ids && !fusion) {
+            const int64_t s01 = src0->nb[1] / ts_src0;
+            const int64_t s02 = src0->nb[2] / ts_src0;
+            const int64_t s03 = src0->nb[3] / ts_src0;
+            const int64_t s2  =  dst->nb[2] / ts_dst;
+            const int64_t s3  =  dst->nb[3] / ts_dst;
+
+            // f32 strides (in float elements)
+            const int64_t s12_f32 = src1->nb[2] / sizeof(float);
+            const int64_t s13_f32 = src1->nb[3] / sizeof(float);
+
+            const int warp_size_val = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+            const mmvq_parameter_table_id table_id = get_device_table_id(
+                ggml_cuda_info().devices[ggml_cuda_get_device()].cc);
+            const int nwarps_val = calc_nwarps(1, table_id);
+
+            const dim3 block_nums(ne01, ne02, ne03);
+            const dim3 block_dims(warp_size_val, nwarps_val, 1);
+
+            float * dst_d = (float *) dst->data;
+
+            mmvq_q4_0_f32act<<<block_nums, block_dims, 0, stream>>>(
+                src0->data, src1_d, dst_d, ne00, s01,
+                make_uint3(ne12, ne12, ne12),
+                init_fastdiv_values(ne02), s02, s12_f32, s2,
+                init_fastdiv_values(ne03), s03, s13_f32, s3);
+            return;
         }
     }
 

@@ -655,6 +655,35 @@ static __device__ __forceinline__ float vec_dot_q4_0_q8_1(
     return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
 }
 
+// F32 activation dot product for Q4_0 - eliminates q8_1 quantization step
+// Computes: d4 * sum((q4_nibble - 8) * y_f32) directly
+static __device__ __forceinline__ float vec_dot_q4_0_f32(
+    const void * __restrict__ vbq, const float * __restrict__ y_f32,
+    const int & kbx, const int & iqs) {
+
+    const block_q4_0 * bq4_0 = (const block_q4_0 *) vbq + kbx;
+    float sumf = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < VDR_Q4_0_Q8_1_MMVQ; ++i) {
+        const int v = get_int_b2(bq4_0->qs, iqs + i);
+        const int ofs = 4 * (iqs + i);
+
+        // Q4_0 qs layout: qs[k] low nibble = value[k], high nibble = value[k+16]
+        // Low nibbles -> positions ofs+{0,1,2,3}
+        sumf += (float((v >>  0) & 0xF) - 8.0f) * y_f32[ofs +  0];
+        sumf += (float((v >>  8) & 0xF) - 8.0f) * y_f32[ofs +  1];
+        sumf += (float((v >> 16) & 0xF) - 8.0f) * y_f32[ofs +  2];
+        sumf += (float((v >> 24) & 0xF) - 8.0f) * y_f32[ofs +  3];
+        // High nibbles -> positions ofs+16+{0,1,2,3}
+        sumf += (float((v >>  4) & 0xF) - 8.0f) * y_f32[ofs + 16];
+        sumf += (float((v >> 12) & 0xF) - 8.0f) * y_f32[ofs + 17];
+        sumf += (float((v >> 20) & 0xF) - 8.0f) * y_f32[ofs + 18];
+        sumf += (float((v >> 28) & 0xF) - 8.0f) * y_f32[ofs + 19];
+    }
+    return __half2float(bq4_0->d) * sumf;
+}
+
 
 static __device__ __forceinline__ float vec_dot_q4_1_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
