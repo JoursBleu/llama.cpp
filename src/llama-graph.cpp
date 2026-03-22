@@ -1013,6 +1013,11 @@ llm_graph_qkv llm_graph_context::build_qkv(
         if (layer.bqkv) {
             qkv = ggml_add(ctx0, qkv, layer.bqkv);
             cb(qkv, "bqkv", il);
+        } else if (layer.bq) {
+            // fused weights but separate biases: concat bq+bk+bv and add
+            ggml_tensor * bqkv = ggml_concat(ctx0, layer.bq, ggml_concat(ctx0, layer.bk, layer.bv, 0), 0);
+            qkv = ggml_add(ctx0, qkv, bqkv);
+            cb(qkv, "bqkv", il);
         }
         Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head,    n_tokens,
             ggml_element_size(qkv) * n_embd_head, qkv->nb[1], 0);
