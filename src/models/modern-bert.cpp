@@ -37,14 +37,8 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
         }
 
         // self attention
-        cur = build_lora_mm(model.layers[il].wqkv, cur);
-        cb(cur, "wqkv", il);
-
-        const size_t type_size = ggml_type_size(cur->type);
-
-        ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, n_embd_head*type_size, cur->nb[1], 0*type_size*(n_embd));
-        ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd));
-        ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd + n_embd_gqa));
+        auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                n_embd_head, n_head, n_head_kv, il);
 
         // RoPE
         Qcur = ggml_rope_ext(

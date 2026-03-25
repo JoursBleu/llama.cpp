@@ -29,15 +29,8 @@ llm_build_bailingmoe2::llm_build_bailingmoe2(const llama_model & model, const ll
 
         // self_attention
         {
-            cur = build_lora_mm(model.layers[il].wqkv, cur);
-            cb(cur, "wqkv", il);
-
-            ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head, n_tokens, n_embd_head * sizeof(float),
-                                              cur->nb[1], 0 * sizeof(float) * (n_embd));
-            ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float),
-                                              cur->nb[1], 1 * sizeof(float) * (n_embd));
-            ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float),
-                                              cur->nb[1], 1 * sizeof(float) * (n_embd + n_embd_gqa));
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
