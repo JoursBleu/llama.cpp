@@ -13,8 +13,6 @@ llm_build_mimo2_iswa::llm_build_mimo2_iswa(const llama_model & model, const llm_
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
-        uint32_t n_head_l    = hparams.n_head(il);
-        uint32_t n_head_kv_l = hparams.n_head_kv(il);
         const float freq_base_l  = model.get_rope_freq_base(cparams, il);
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
@@ -26,18 +24,8 @@ llm_build_mimo2_iswa::llm_build_mimo2_iswa(const llama_model & model, const llm_
             cb(cur, "attn_norm", il);
 
             // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head_l,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv_l, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv_l, n_tokens);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head_k, n_head, n_head_kv, il);
 
             Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, nullptr,
