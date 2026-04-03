@@ -27,18 +27,11 @@ llm_build_t5_enc::llm_build_t5_enc(const llama_model & model, const llm_graph_pa
 
         // self-attention
         {
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq_enc, cur);
-            cb(Qcur, "Qcur", il);
-
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk_enc, cur);
-            cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv_enc, cur);
-            cb(Vcur, "Vcur", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            auto qkv = build_qkv(model.layers[il].wq_enc, model.layers[il].wk_enc, model.layers[il].wv_enc,
+                    cur, n_embd_head, n_head, n_head_kv, il);
+            ggml_tensor * Qcur = qkv.q;
+            ggml_tensor * Kcur = qkv.k;
+            ggml_tensor * Vcur = qkv.v;
 
             ggml_tensor * attn_rel_b = model.layers[il].attn_rel_b_enc ? model.layers[il].attn_rel_b_enc : model.layers[0].attn_rel_b_enc;
             ggml_tensor * kq_b = build_pos_bias(pos_bucket_enc, attn_rel_b);

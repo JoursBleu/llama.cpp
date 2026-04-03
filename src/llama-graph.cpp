@@ -1059,11 +1059,15 @@ llm_graph_qkv llm_graph_context::build_qkv(
 
     if (layer.wqkv) {
         // fused QKV path
-        ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur);
+        ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur, layer.wqkv_s);
         cb(qkv, "wqkv", il);
         if (layer.bqkv) {
             qkv = ggml_add(ctx0, qkv, layer.bqkv);
             cb(qkv, "bqkv", il);
+        }
+        if (hparams.f_clamp_kqv > 0.0f) {
+            qkv = ggml_clamp(ctx0, qkv, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+            cb(qkv, "wqkv_clamped", il);
         }
         Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head,    n_tokens,
             ggml_element_size(qkv) * n_embd_head, qkv->nb[1], 0);
@@ -1081,11 +1085,19 @@ llm_graph_qkv llm_graph_context::build_qkv(
             Qcur = ggml_add(ctx0, Qcur, layer.bq);
             cb(Qcur, "Qcur", il);
         }
+        if (hparams.f_clamp_kqv > 0.0f) {
+            Qcur = ggml_clamp(ctx0, Qcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+            cb(Qcur, "Qcur_clamped", il);
+        }
         Kcur = build_lora_mm(layer.wk, cur, layer.wk_s);
         cb(Kcur, "Kcur", il);
         if (layer.bk) {
             Kcur = ggml_add(ctx0, Kcur, layer.bk);
             cb(Kcur, "Kcur", il);
+        }
+        if (hparams.f_clamp_kqv > 0.0f) {
+            Kcur = ggml_clamp(ctx0, Kcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+            cb(Kcur, "Kcur_clamped", il);
         }
         Vcur = build_lora_mm(layer.wv, cur, layer.wv_s);
         cb(Vcur, "Vcur", il);
@@ -1093,10 +1105,43 @@ llm_graph_qkv llm_graph_context::build_qkv(
             Vcur = ggml_add(ctx0, Vcur, layer.bv);
             cb(Vcur, "Vcur", il);
         }
+        if (hparams.f_clamp_kqv > 0.0f) {
+            Vcur = ggml_clamp(ctx0, Vcur, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
+            cb(Vcur, "Vcur_clamped", il);
+        }
         Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
     }
+
+    cb(Qcur, "Qcur", il);
+    cb(Kcur, "Kcur", il);
+    cb(Vcur, "Vcur", il);
+
+    return { Qcur, Kcur, Vcur };
+}
+
+llm_graph_qkv llm_graph_context::build_qkv(
+              ggml_tensor * wq,
+              ggml_tensor * wk,
+              ggml_tensor * wv,
+              ggml_tensor * cur,
+                  int64_t   n_embd_head,
+                  int64_t   n_head,
+                  int64_t   n_head_kv,
+                      int   il) const {
+    ggml_tensor * Qcur = build_lora_mm(wq, cur);
+    cb(Qcur, "Qcur", il);
+
+    ggml_tensor * Kcur = build_lora_mm(wk, cur);
+    cb(Kcur, "Kcur", il);
+
+    ggml_tensor * Vcur = build_lora_mm(wv, cur);
+    cb(Vcur, "Vcur", il);
+
+    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);

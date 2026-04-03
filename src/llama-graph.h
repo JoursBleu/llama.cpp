@@ -808,6 +808,16 @@ struct llm_graph_context {
                   int64_t   n_head,
                   int64_t   n_head_kv,
                       int   il) const;
+    // overload for explicit weight tensors (e.g. t5-enc wq_enc/wk_enc/wv_enc)
+    llm_graph_qkv build_qkv(
+              ggml_tensor * wq,
+              ggml_tensor * wk,
+              ggml_tensor * wv,
+              ggml_tensor * cur,
+                  int64_t   n_embd_head,
+                  int64_t   n_head,
+                  int64_t   n_head_kv,
+                      int   il) const;
 
     ggml_tensor * build_ffn(
              ggml_tensor * cur,
