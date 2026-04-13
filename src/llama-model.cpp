@@ -7526,9 +7526,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     eagle2_fc      = create_tensor(tn(LLM_TENSOR_EAGLE2_FC, "weight"), {2*n_embd, n_embd}, 0);
                     eagle2_fc_bias = create_tensor(tn(LLM_TENSOR_EAGLE2_FC_BIAS), {n_embd}, TENSOR_NOT_REQUIRED);
 
+                    // Check for small vocab optimization via vocab_map metadata
+                    int64_t output_n_vocab = n_vocab;
+                    if (ml.get_arr("eagle2.vocab_map", eagle2_vocab_map, false)) {
+                        output_n_vocab = (int64_t)eagle2_vocab_map.size();
+                        LLAMA_LOG_INFO("%s: EAGLE2 small vocab enabled, output_vocab=%lld (full=%lld)\n",
+                                       __func__, (long long)output_n_vocab, (long long)n_vocab);
+                    }
+
                     // Output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, output_n_vocab}, 0);
 
                     // Token embeddings (EAGLE2 has its own)
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
@@ -9492,6 +9500,14 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
 
 int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
+}
+
+int32_t llama_model_eagle2_vocab_map_size(const llama_model * model) {
+    return (int32_t)model->eagle2_vocab_map.size();
+}
+
+const int32_t * llama_model_eagle2_vocab_map(const llama_model * model) {
+    return model->eagle2_vocab_map.empty() ? nullptr : model->eagle2_vocab_map.data();
 }
 
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {

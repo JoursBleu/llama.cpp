@@ -579,6 +579,12 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
 
+    // EAGLE2 small vocab: returns vocab_map size (0 if not using small vocab)
+    LLAMA_API int32_t llama_model_eagle2_vocab_map_size(const struct llama_model * model);
+
+    // EAGLE2 small vocab: returns pointer to vocab_map array (nullptr if not using small vocab)
+    LLAMA_API const int32_t * llama_model_eagle2_vocab_map(const struct llama_model * model);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 

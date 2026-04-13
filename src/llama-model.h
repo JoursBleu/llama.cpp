@@ -562,7 +562,10 @@ struct llama_model {
 
     // EAGLE2 specific
     struct ggml_tensor * eagle2_fc      = nullptr;  // [2*hidden, hidden]
-    struct ggml_tensor * eagle2_fc_bias = nullptr;  // [hidden]  // draft to target vocabulary mapping
+    struct ggml_tensor * eagle2_fc_bias = nullptr;  // [hidden]
+    std::vector<int32_t> eagle2_vocab_map;           // hot token ID mapping for small vocab
+
+    // draft to target vocabulary mapping
     // Reference to target model's embedding layer
     // This allows EAGLE3 to use target model's embeddings without copying
     struct ggml_tensor * target_tok_embd = nullptr;

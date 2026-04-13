@@ -1836,6 +1836,26 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
                         last_logits_out[target_id] = eagle3_draft_logits[j];
                     }
+                } else if (model.arch == LLM_ARCH_EAGLE2 && !model.eagle2_vocab_map.empty()) {
+                    // EAGLE2 small vocab: map K hot-token logits to full vocab
+                    static thread_local std::vector<float> eagle2_small_logits;
+
+                    const int64_t hot_vocab_size = t_logits->ne[0];
+                    const uint32_t last_idx = n_outputs - 1;
+
+                    eagle2_small_logits.resize(hot_vocab_size);
+                    const size_t last_offset = last_idx * hot_vocab_size * sizeof(float);
+                    ggml_backend_tensor_get_async(backend_res, t_logits, eagle2_small_logits.data(), last_offset, hot_vocab_size * sizeof(float));
+                    synchronize();
+
+                    float * last_logits_out = logits_out + last_idx * n_vocab;
+                    std::fill(last_logits_out, last_logits_out + n_vocab, -std::numeric_limits<float>::infinity());
+
+                    for (int64_t j = 0; j < hot_vocab_size && j < (int64_t)model.eagle2_vocab_map.size(); j++) {
+                        const int32_t target_id = model.eagle2_vocab_map[j];
+                        GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
+                        last_logits_out[target_id] = eagle2_small_logits[j];
+                    }
                 } else {
                     ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
                 }
