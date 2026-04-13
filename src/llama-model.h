@@ -558,7 +558,11 @@ struct llama_model {
 
     // eagle3
     struct ggml_tensor * fc  = nullptr;  // feature fusion layer
-    struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
+    struct ggml_tensor * d2t = nullptr;
+
+    // EAGLE2 specific
+    struct ggml_tensor * eagle2_fc      = nullptr;  // [2*hidden, hidden]
+    struct ggml_tensor * eagle2_fc_bias = nullptr;  // [hidden]  // draft to target vocabulary mapping
     // Reference to target model's embedding layer
     // This allows EAGLE3 to use target model's embeddings without copying
     struct ggml_tensor * target_tok_embd = nullptr;

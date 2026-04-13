@@ -61,6 +61,7 @@ add_library(llama
             models/dots1.cpp
             models/dream.cpp
             models/eagle3.cpp
+            models/eagle2.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
             models/eurobert.cpp

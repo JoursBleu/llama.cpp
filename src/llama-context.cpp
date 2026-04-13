@@ -1176,19 +1176,18 @@ void llama_context::set_eagle3(const llama_model * model) {
         return;
     }
 
-    sched_need_reserve = true;
-
-    // EAGLE2: only needs target model's final hidden state (embeddings)
-    // No intermediate layer feature extraction needed
+    // EAGLE2: only needs target embeddings (final hidden state), no intermediate layer extraction
     if (model->arch == LLM_ARCH_EAGLE2) {
         cparams.eagle3_extract_enabled = false;
-        cparams.embeddings = true;  // enable embeddings output from target model
-        LLAMA_LOG_INFO("%s: EAGLE2 mode - embeddings enabled for target model\n", __func__);
+        cparams.embeddings = true;
+        sched_need_reserve = true;
+        LLAMA_LOG_INFO("%s: EAGLE2 mode: embeddings enabled on target context (no layer extraction)\n", __func__);
         return;
     }
 
     // EAGLE3: full intermediate layer feature extraction
     cparams.eagle3_extract_enabled = true;
+    sched_need_reserve = true;
 
     const auto & eagle3_hparams = model->hparams;
 
@@ -3111,8 +3110,7 @@ llama_context * llama_init_from_model(
     // Auto-setup for EAGLE3: set target embedding if target_model is provided
     if ((model->arch == LLM_ARCH_EAGLE3 || model->arch == LLM_ARCH_EAGLE2) && params.target_model) {
         model->target_tok_embd = params.target_model->tok_embd;
-        LLAMA_LOG_INFO("%s: %s auto-setup: using target model's embedding layer\n", __func__,
-                model->arch == LLM_ARCH_EAGLE2 ? "EAGLE2" : "EAGLE3");
+        LLAMA_LOG_INFO("%s: EAGLE3 auto-setup: using target model's embedding layer\n", __func__);
     }
 
     if (params.n_batch == 0 && params.n_ubatch == 0) {

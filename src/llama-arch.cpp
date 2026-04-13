@@ -126,6 +126,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_MISTRAL3,         "mistral3"         },
     { LLM_ARCH_EAGLE3,           "eagle3"           },
+    { LLM_ARCH_EAGLE2,           "eagle2"           },
     { LLM_ARCH_MISTRAL4,         "mistral4"         },
     { LLM_ARCH_PADDLEOCR,        "paddleocr"        },
     { LLM_ARCH_MIMO2,            "mimo2"            },
@@ -554,6 +555,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_EAGLE3_HIDDEN_NORM,                     "blk.%d.hidden_norm" },
     { LLM_TENSOR_EAGLE3_FC,                              "fc" },
     { LLM_TENSOR_EAGLE3_D2T,                             "d2t" },
+    { LLM_TENSOR_EAGLE2_FC,              "fc"                        },
+    { LLM_TENSOR_EAGLE2_FC_BIAS,         "fc.bias"                   },
 };
 
 static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
@@ -2463,6 +2466,24 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_EAGLE3_FC,
                 LLM_TENSOR_EAGLE3_D2T,
             };
+        case LLM_ARCH_EAGLE2:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_K,
+                LLM_TENSOR_ATTN_V,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_UP,
+                LLM_TENSOR_EAGLE2_FC,
+                LLM_TENSOR_EAGLE2_FC_BIAS,
+            };
+
         case LLM_ARCH_MIMO2:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
@@ -2810,6 +2831,9 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_EAGLE3_FC,                  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_EAGLE3_HIDDEN_NORM,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_EAGLE3_D2T,                 {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
+    // EAGLE-2 tensors
+    {LLM_TENSOR_EAGLE2_FC,                  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_EAGLE2_FC_BIAS,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_ADD}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}

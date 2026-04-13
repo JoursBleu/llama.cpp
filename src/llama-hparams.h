@@ -218,6 +218,10 @@ struct llama_hparams {
 
     // EAGLE3 draft model - apply hidden_norm before storing residual
     bool eagle3_norm_before_residual = false;
+
+    // EAGLE2 parameters
+    uint32_t eagle2_target_hidden_size = 0;
+    bool     eagle2_fc_has_bias = false;
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
 

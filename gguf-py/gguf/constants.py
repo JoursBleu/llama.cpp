@@ -155,6 +155,8 @@ class Keys:
         EAGLE3_EXTRACT_LAYERS             = "{arch}.extract_layers"
         EAGLE3_TARGET_HIDDEN_SIZE         = "{arch}.target_hidden_size"
         EAGLE3_NORM_BEFORE_RESIDUAL       = "{arch}.norm_before_residual"
+        EAGLE2_TARGET_HIDDEN_SIZE         = "{arch}.target_hidden_size"
+        EAGLE2_FC_HAS_BIAS                = "{arch}.fc_has_bias"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -491,6 +493,7 @@ class MODEL_ARCH(IntEnum):
     PANGU_EMBED      = auto()
     MISTRAL3         = auto()
     EAGLE3           = auto()
+    EAGLE2           = auto()
     MISTRAL4         = auto()
     PADDLEOCR        = auto()
     MIMO2            = auto()
@@ -850,6 +853,9 @@ class MODEL_TENSOR(IntEnum):
     EAGLE3_FC          = auto()  # feature fusion layer
     EAGLE3_HIDDEN_NORM = auto()  # hidden normalization
     EAGLE3_D2T         = auto()  # draft to target vocabulary mapping
+    # EAGLE2 specific tensors
+    EAGLE2_FC          = auto()  # feature fusion layer fc(2*d, d)
+    EAGLE2_FC_BIAS     = auto()  # fc bias
     # lfm2 audio
     A_ENC_NORM_CONV        = auto()
     A_ENC_LINEAR_POS       = auto()
@@ -982,6 +988,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.PANGU_EMBED:      "pangu-embedded",
     MODEL_ARCH.MISTRAL3:         "mistral3",
     MODEL_ARCH.EAGLE3:           "eagle3",
+    MODEL_ARCH.EAGLE2:           "eagle2",
     MODEL_ARCH.MISTRAL4:         "mistral4",
     MODEL_ARCH.PADDLEOCR:        "paddleocr",
     MODEL_ARCH.MIMO2:            "mimo2",
@@ -1349,6 +1356,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.EAGLE3_FC:                 "fc",
     MODEL_TENSOR.EAGLE3_HIDDEN_NORM:        "blk.{bid}.hidden_norm",
     MODEL_TENSOR.EAGLE3_D2T:                "d2t",
+    MODEL_TENSOR.EAGLE2_FC:                 "fc",
+    MODEL_TENSOR.EAGLE2_FC_BIAS:            "fc.bias",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -3736,6 +3745,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
     ],
     MODEL_ARCH.EAGLE3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.EAGLE3_FC,
+        MODEL_TENSOR.EAGLE3_HIDDEN_NORM,
+        MODEL_TENSOR.EAGLE3_D2T,
+    ],
+    MODEL_ARCH.EAGLE2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.EAGLE2_FC,
+        MODEL_TENSOR.EAGLE2_FC_BIAS,
+    ],
     MODEL_ARCH.MISTRAL4: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,

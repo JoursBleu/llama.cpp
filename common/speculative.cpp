@@ -21,6 +21,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NONE,
     COMMON_SPECULATIVE_TYPE_DRAFT,
     COMMON_SPECULATIVE_TYPE_EAGLE3,
+    COMMON_SPECULATIVE_TYPE_EAGLE2,
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
@@ -32,6 +33,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft",         COMMON_SPECULATIVE_TYPE_DRAFT},
     {"eagle3",        COMMON_SPECULATIVE_TYPE_EAGLE3},
+    {"eagle2",        COMMON_SPECULATIVE_TYPE_EAGLE2},
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -595,6 +597,120 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
     }
 };
 
+
+
+struct common_speculative_state_eagle2 : public common_speculative_state {
+    llama_context * ctx_tgt;
+
+    common_sampler * smpl;
+    llama_batch batch;
+
+    struct llama_context * ctx_dft = nullptr;  // decoder only, no separate encoder
+
+    int32_t eagle2_n_past = 0;
+
+    common_speculative_state_eagle2(
+            enum common_speculative_type type,
+            llama_context * ctx_tgt,
+            llama_context * ctx_dft)
+        : common_speculative_state(type), ctx_tgt(ctx_tgt), ctx_dft(ctx_dft)
+    {
+        batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
+
+        common_params_sampling params;
+        params.no_perf = false;
+        params.top_k = 10;
+        params.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+        smpl = common_sampler_init(llama_get_model(ctx_dft), params);
+    }
+
+    ~common_speculative_state_eagle2() override {
+        llama_perf_context_print(ctx_dft);
+        if (ctx_dft) {
+            llama_free(ctx_dft);
+        }
+        llama_batch_free(batch);
+        common_sampler_free(smpl);
+    }
+
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_params_speculative & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        auto * spec = this;
+        auto & batch   = spec->batch;
+        auto & ctx_tgt = spec->ctx_tgt;
+        auto & ctx_dft = spec->ctx_dft;
+        auto & smpl    = spec->smpl;
+
+        const int n_embd = llama_model_n_embd(llama_get_model(ctx_dft));
+
+        // EAGLE2: clear entire draft KV cache each round.
+        // We only have the target's last hidden state, not all positions,
+        // so start fresh at position 0 every time.
+        llama_memory_seq_rm(llama_get_memory(ctx_dft), 0, 0, -1);
+
+        // Get target model's last hidden state (post-norm embeddings)
+        const float * target_embd = llama_get_embeddings(ctx_tgt);
+        GGML_ASSERT(target_embd && "no target embeddings");
+
+        // Decode 1 token (id_last) with target hidden state
+        llama_set_eagle3_g_embeddings(ctx_dft, target_embd, n_embd, 1);
+
+        common_batch_clear(batch);
+        common_batch_add(batch, id_last, 0, {0}, true);
+        GGML_ASSERT(llama_decode(ctx_dft, batch) == 0);
+
+        // Sample draft tokens
+        result.clear();
+        common_sampler_reset(smpl);
+
+        auto sample_and_check = [&](int idx) -> bool {
+            common_sampler_sample(smpl, ctx_dft, idx);
+
+            const auto * cur_p = common_sampler_get_candidates(smpl, true);
+            const llama_token id = cur_p->data[0].id;
+
+            common_sampler_accept(smpl, id, true);
+            result.push_back(id);
+
+            return cur_p->data[0].p >= params.p_min;
+        };
+
+        // First draft token
+        if (!sample_and_check(0)) {
+            return;
+        }
+
+        // Autoregressive: use draft's own prenorm as g_embeddings
+        const float * prenorm = llama_get_embeddings_ith(ctx_dft, -1);
+
+        for (int i = 1; i < params.n_max; i++) {
+            GGML_ASSERT(prenorm && "prenorm failed");
+            llama_set_eagle3_g_embeddings(ctx_dft, prenorm, n_embd, 1);
+
+            common_batch_clear(batch);
+            common_batch_add(batch, result.back(), i, {0}, true);
+            GGML_ASSERT(llama_decode(ctx_dft, batch) == 0);
+
+            prenorm = llama_get_embeddings_ith(ctx_dft, -1);
+
+            if (!sample_and_check(0)) {
+                break;
+            }
+        }
+    }
+
+    void accept(uint16_t n_accepted) override {
+        GGML_UNUSED(n_accepted);
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_state_ngram_simple : public common_speculative_state {
     common_ngram_simple_config config;
@@ -914,6 +1030,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NONE:          return "none";
         case COMMON_SPECULATIVE_TYPE_DRAFT:         return "draft";
         case COMMON_SPECULATIVE_TYPE_EAGLE3:        return "eagle3";
+        case COMMON_SPECULATIVE_TYPE_EAGLE2:        return "eagle2";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
@@ -978,7 +1095,17 @@ common_speculative * common_speculative_init(
     llama_context * ctx_dft_dec = nullptr;
 
     if (params.model_dft) {
-        if (params.eagle3) {
+
+        if (params.eagle2) {
+            llama_context_params params_dec = params.cparams_dft;
+            params_dec.target_model = params.model_tgt;
+            params_dec.embeddings = true;
+            ctx_dft_dec = llama_init_from_model(params.model_dft, params_dec);
+            if (!ctx_dft_dec) {
+                LOG_ERR("failed to create EAGLE2 decoder context\n");
+                return nullptr;
+            }
+        } else if (params.eagle3) {
             llama_context_params params_enc = params.cparams_dft;
             params_enc.target_model = nullptr;
             params_enc.embeddings = true;
@@ -1010,6 +1137,7 @@ common_speculative * common_speculative_init(
     {
         bool has_draft = !params.mparams_dft.path.empty();
         bool has_draft_eagle3 = params.eagle3;
+        bool has_draft_eagle2 = params.eagle2;
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
         bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
@@ -1050,7 +1178,9 @@ common_speculative * common_speculative_init(
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
         if (has_draft) {
-            if (has_draft_eagle3) {
+            if (has_draft_eagle2) {
+                configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE2, params));
+            } else if (has_draft_eagle3) {
                 configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3, params));
             } else {
                 configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT, params));
@@ -1070,6 +1200,13 @@ common_speculative * common_speculative_init(
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .ctx_dft      = */ ctx_dft,
                     /* .replacements = */ params.replacements
+                ));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_EAGLE2: {
+                impls.push_back(std::make_unique<common_speculative_state_eagle2>(config.type,
+                    /* .ctx_tgt     = */ ctx_tgt,
+                    /* .ctx_dft     = */ ctx_dft_dec
                 ));
                 break;
             }

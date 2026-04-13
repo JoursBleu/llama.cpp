@@ -84,14 +84,14 @@ int main(int argc, char ** argv) {
         params.speculative.model_dft = model_dft.get();
         params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
 
-        if (params.speculative.eagle3) {
+        if (params.speculative.eagle3 || params.speculative.eagle2) {
             llama_set_eagle3(ctx_tgt, model_dft.get());
         }
     }
 
     // Apply chat template for EAGLE3 if available which can increase the acceptance rate
     std::string prompt = params.prompt;
-    if (params.speculative.eagle3) {
+    if (params.speculative.eagle3 || params.speculative.eagle2) {
         auto chat_templates = common_chat_templates_init(model_tgt, params.chat_template);
         if (common_chat_templates_was_explicit(chat_templates.get())) {
             std::vector<common_chat_msg> chat_msgs;
@@ -152,7 +152,7 @@ int main(int argc, char ** argv) {
     int n_past;
 
     // TODO: simplify
-    if (params.speculative.eagle3) {
+    if (params.speculative.eagle3 || params.speculative.eagle2) {
         // Target model decodes full prompt and sample first token and intermediate features are extracted
         llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size()));
 

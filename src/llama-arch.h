@@ -138,6 +138,7 @@ enum llm_arch {
     LLM_ARCH_KIMI_LINEAR,
     LLM_ARCH_UNKNOWN,
     LLM_ARCH_EAGLE3,
+    LLM_ARCH_EAGLE2,
 };
 
 enum llm_kv {
@@ -560,6 +561,8 @@ enum llm_tensor {
     LLM_TENSOR_EAGLE3_FC,              // eagle3: feature fusion layer
     LLM_TENSOR_EAGLE3_HIDDEN_NORM,     // eagle3: additional normalization layer
     LLM_TENSOR_EAGLE3_D2T,             // eagle3: draft to target vocabulary mapping
+    LLM_TENSOR_EAGLE2_FC,
+    LLM_TENSOR_EAGLE2_FC_BIAS,
 };
 
 enum llm_tensor_layer {

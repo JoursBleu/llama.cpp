@@ -2758,6 +2758,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 type = LLM_TYPE_UNKNOWN;
             } break;
+            case LLM_ARCH_EAGLE2:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                type = LLM_TYPE_UNKNOWN;
+            } break;
+
         case LLM_ARCH_COGVLM:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -3121,8 +3128,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
         };
         switch (arch) {
-            case LLM_ARCH_EAGLE2:
-        case LLM_ARCH_LLAMA:
+            case LLM_ARCH_LLAMA:
             case LLM_ARCH_REFACT:
             case LLM_ARCH_MINICPM:
             case LLM_ARCH_GRANITE:
@@ -7514,6 +7520,37 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED);
                     }
                 } break;
+            case LLM_ARCH_EAGLE2:
+                {
+                    // FC layer: [2*n_embd, n_embd]
+                    eagle2_fc      = create_tensor(tn(LLM_TENSOR_EAGLE2_FC, "weight"), {2*n_embd, n_embd}, 0);
+                    eagle2_fc_bias = create_tensor(tn(LLM_TENSOR_EAGLE2_FC_BIAS), {n_embd}, TENSOR_NOT_REQUIRED);
+
+                    // Output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    // Token embeddings (EAGLE2 has its own)
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    // Single decoder layer
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
+
             case LLM_ARCH_KIMI_LINEAR:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -9322,6 +9359,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
                     llm = std::make_unique<llm_build_eagle3_decode>(*this, params);
                 }
             } break;
+        case LLM_ARCH_EAGLE2:
+            {
+                llm = std::make_unique<llm_build_eagle2>(*this, params);
+            } break;
+
         case LLM_ARCH_COGVLM:
             {
                 llm = std::make_unique<llm_build_cogvlm>(*this, params);
