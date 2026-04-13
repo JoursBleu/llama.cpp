@@ -702,6 +702,15 @@ private:
                 llama_set_eagle3(ctx, model_dft.get());
                 SRV_INF("%s", "EAGLE3 feature extraction enabled on target model\n");
             }
+
+            if (params_base.speculative.eagle2) {
+                if (params_base.n_parallel > 1) {
+                    SRV_ERR("%s", "EAGLE2 speculative decoding is not supported with n_parallel > 1\n");
+                    return false;
+                }
+                llama_set_eagle3(ctx, model_dft.get());
+                SRV_INF("%s", "EAGLE2 speculative decoding enabled\n");
+            }
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
@@ -2720,7 +2729,7 @@ private:
                 slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
 
-            llama_set_embeddings(ctx, slot_batched->task->need_embd());
+            llama_set_embeddings(ctx, slot_batched->task->need_embd() || params_base.speculative.eagle2);
         }
 
         if (batch.n_tokens == 0) {

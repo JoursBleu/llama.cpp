@@ -9646,6 +9646,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_GROVEMOE:
         case LLM_ARCH_APERTUS:
+        case LLM_ARCH_EAGLE2:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_COGVLM:
         case LLM_ARCH_PANGU_EMBED:
