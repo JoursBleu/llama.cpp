@@ -1,5 +1,6 @@
 #include "llama-context.h"
 
+#include "ggml.h"
 #include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
@@ -8,6 +9,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
+#include "llama.h"
 
 #include <cinttypes>
 #include <cmath>
@@ -219,10 +221,10 @@ llama_context::llama_context(
 
     if (!hparams.vocab_only) {
         // GPU backends
-        for (auto * dev : model.devices) {
-            ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+        for (const auto & dev : model.devices) {
+            ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
             if (backend == nullptr) {
-                throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev)));
+                throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
             backends.emplace_back(backend);
         }
@@ -297,8 +299,8 @@ llama_context::llama_context(
 
             if (backend_type == GGML_BACKEND_DEVICE_TYPE_CPU && !model.devices.empty()) {
                 // use the host buffer of the first device CPU for faster transfer of the intermediate state
-                auto * dev = model.devices[0];
-                auto * host_buft = ggml_backend_dev_host_buffer_type(dev);
+                const auto & dev = model.devices[0];
+                auto * host_buft = ggml_backend_dev_host_buffer_type(dev.dev);
                 if (host_buft) {
                     buft = host_buft;
                 }
@@ -344,14 +346,6 @@ llama_context::llama_context(
 
         if (cparams.pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
-
-            if (!graph_reuse_disable) {
-                // TODO: figure out a way to make graph reuse work with pipeline parallelism
-                // ref: https://github.com/ggml-org/llama.cpp/pull/20463
-                LLAMA_LOG_WARN("%s: graph reuse is currently not compatible with pipeline parallelism - disabling\n", __func__);
-
-                graph_reuse_disable = true;
-            }
         }
 
         sched_reserve();
@@ -596,7 +590,7 @@ void llama_context::sched_reserve() {
 
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
     {
-        // TODO: not sure if the following graph would be worster case for multi-stream KV caches:
+        // TODO: not sure if the following graph would be worst case for multi-stream KV caches:
         //
         // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
         //
@@ -1030,9 +1024,11 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
 
     for (auto & backend : backends) {
         auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get()));
-        auto * set_abort_callback_fn = (ggml_backend_set_abort_callback_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_abort_callback");
-        if (set_abort_callback_fn) {
-            set_abort_callback_fn(backend.get(), this->abort_callback, this->abort_callback_data);
+        if (reg) {
+            auto * set_abort_callback_fn = (ggml_backend_set_abort_callback_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_abort_callback");
+            if (set_abort_callback_fn) {
+                set_abort_callback_fn(backend.get(), this->abort_callback, this->abort_callback_data);
+            }
         }
     }
 }
@@ -1167,19 +1163,32 @@ bool llama_context::set_adapter_cvec(
                 int32_t   il_end) {
     LLAMA_LOG_DEBUG("%s: il_start = %d, il_end = %d\n", __func__, il_start, il_end);
 
-    // TODO: should we reserve?
+    bool res = cvec->apply(model, data, len, n_embd, il_start, il_end);
 
-    return cvec->apply(model, data, len, n_embd, il_start, il_end);
+    sched_need_reserve = true;
+
+    return res;
 }
 
 void llama_context::set_eagle3(const llama_model * model) {
-    // Initialize EAGLE3 feature extraction configuration
-    cparams.eagle3_extract_enabled = !!model;
-    if (!cparams.eagle3_extract_enabled) {
+    if (!model) {
+        cparams.eagle3_extract_enabled = false;
         return;
     }
 
     sched_need_reserve = true;
+
+    // EAGLE2: only needs target model's final hidden state (embeddings)
+    // No intermediate layer feature extraction needed
+    if (model->arch == LLM_ARCH_EAGLE2) {
+        cparams.eagle3_extract_enabled = false;
+        cparams.embeddings = true;  // enable embeddings output from target model
+        LLAMA_LOG_INFO("%s: EAGLE2 mode - embeddings enabled for target model\n", __func__);
+        return;
+    }
+
+    // EAGLE3: full intermediate layer feature extraction
+    cparams.eagle3_extract_enabled = true;
 
     const auto & eagle3_hparams = model->hparams;
 
@@ -1215,6 +1224,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
+        // with pipeline parallelism, the previous graph_compute_async may still be running
+        // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
+        // that the previous compute is still reading.
+        if (cparams.pipeline_parallel) {
+            ggml_backend_sched_synchronize(sched.get());
+        }
+
         n_reused++;
     } else {
         res->reset();
@@ -1249,7 +1265,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->set_inputs(&ubatch);
 
         // EAGLE3: Fill g_embeddings for decoder input
-        if (model.arch == LLM_ARCH_EAGLE3 && gtype == LLM_GRAPH_TYPE_DECODER && !eagle3.g_embeddings.empty()) {
+        if ((model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_EAGLE2) && gtype == LLM_GRAPH_TYPE_DECODER && !eagle3.g_embeddings.empty()) {
             ggml_tensor * g_embd = ggml_graph_get_tensor(gf, "inp_g_embeddings");
             if (g_embd) {
                 ggml_backend_tensor_set(g_embd, eagle3.g_embeddings.data(), 0, ggml_nbytes(g_embd));
@@ -1373,7 +1389,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     GGML_ASSERT(embd.data != nullptr);
                     const uint32_t n_embd_out = hparams.n_embd_out();
 
-                    if (model.arch == LLM_ARCH_EAGLE3) {
+                    if (model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_EAGLE2) {
                         // g_embeddings are stored temporarily in embd buffer
                         const int64_t out_embd = hparams.n_embd;
                         GGML_ASSERT(n_tokens * out_embd <= (int64_t) embd.size);
@@ -1394,8 +1410,11 @@ int llama_context::encode(const llama_batch & batch_inp) {
                         const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                         const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                        embd_seq_out[seq_id].resize(n_embd);
-                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                        // use n_embd_out (not n_embd_inp) - the pooled embedding has the model's
+                        // output dimension, which differs from input dimension for deepstack models (e.g. qwen3vl)
+                        const uint32_t n_embd_out = hparams.n_embd_out();
+                        embd_seq_out[seq_id].resize(n_embd_out);
+                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd_out*seq_idx)*sizeof(float), n_embd_out*sizeof(float));
                     }
                 } break;
             case LLAMA_POOLING_TYPE_RANK:
@@ -1772,7 +1791,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
 
         // For EAGLE3, don't override t_embd with t_embd_pooled - we need the prenorm value during eagle3 decoder autoregressive generation
-        if (t_embd && res->get_embd_pooled() && model.arch != LLM_ARCH_EAGLE3) {
+        if (t_embd && res->get_embd_pooled() && model.arch != LLM_ARCH_EAGLE3 && model.arch != LLM_ARCH_EAGLE2) {
             t_embd = res->get_embd_pooled();
         }
 
@@ -1789,7 +1808,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
 
                 // EAGLE3: Map draft vocab to target vocab
-                if (model.arch == LLM_ARCH_EAGLE3 && model.d2t) {
+                if ((model.arch == LLM_ARCH_EAGLE3 || model.arch == LLM_ARCH_EAGLE2) && model.d2t) {
                     static thread_local std::vector<int64_t> eagle3_d2t_map;
                     static thread_local std::vector<float>   eagle3_draft_logits;
 
@@ -1850,12 +1869,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         // extract sequence embeddings (cleared before processing each batch)
                         auto & embd_seq_out = embd_seq;
 
+                        // use n_embd_out (not n_embd_inp) - the pooled embedding has the model's
+                        // output dimension, which differs from input dimension for deepstack models (e.g. qwen3vl)
+                        const uint32_t n_embd_out = hparams.n_embd_out();
+
                         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                             const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                             const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                            embd_seq_out[seq_id].resize(n_embd);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                            embd_seq_out[seq_id].resize(n_embd_out);
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd_out*seq_idx)*sizeof(float), n_embd_out*sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_RANK:
@@ -2027,6 +2050,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
             LLAMA_LOG_ERROR("%s: failed to allocate output buffer of size %.2f MiB\n", __func__, new_size / (1024.0 * 1024.0));
             return 0;
         }
+        ggml_backend_buffer_clear(buf_output.get(), 0);
     }
 
     float * output_base = (float *) ggml_backend_buffer_get_base(buf_output.get());
@@ -2199,6 +2223,9 @@ ggml_cgraph * llama_context::graph_reserve(
         } else if (model.target_tok_embd != nullptr) {
             gtype = LLM_GRAPH_TYPE_DECODER;
         }
+    }
+    if (model.arch == LLM_ARCH_EAGLE2) {
+        gtype = LLM_GRAPH_TYPE_DECODER;
     }
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
@@ -3082,9 +3109,10 @@ llama_context * llama_init_from_model(
     }
 
     // Auto-setup for EAGLE3: set target embedding if target_model is provided
-    if (model->arch == LLM_ARCH_EAGLE3 && params.target_model) {
+    if ((model->arch == LLM_ARCH_EAGLE3 || model->arch == LLM_ARCH_EAGLE2) && params.target_model) {
         model->target_tok_embd = params.target_model->tok_embd;
-        LLAMA_LOG_INFO("%s: EAGLE3 auto-setup: using target model's embedding layer\n", __func__);
+        LLAMA_LOG_INFO("%s: %s auto-setup: using target model's embedding layer\n", __func__,
+                model->arch == LLM_ARCH_EAGLE2 ? "EAGLE2" : "EAGLE3");
     }
 
     if (params.n_batch == 0 && params.n_ubatch == 0) {
@@ -3102,7 +3130,22 @@ llama_context * llama_init_from_model(
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
     }
 
-    if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO && ggml_is_quantized(params.type_k)) {
+    if (model->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
+        if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+            LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for SPLIT_MODE_TENSOR\n", __func__);
+            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        }
+        if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+            LLAMA_LOG_ERROR("%s: SPLIT_MODE_TENSOR requires flash_attn to be enabled\n", __func__);
+            return nullptr;
+        }
+        if (ggml_is_quantized(params.type_k) || ggml_is_quantized(params.type_v)) {
+            LLAMA_LOG_ERROR("%s: simultaneous use of SPLIT_MODE_TENSOR and KV cache quantization not implemented\n", __func__);
+            return nullptr;
+        }
+    }
+
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
         const uint32_t blck_size = ggml_blck_size(params.type_k);
         for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
             if (model->hparams.n_embd_head_k(il) % blck_size != 0) {
@@ -3113,7 +3156,7 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO && ggml_is_quantized(params.type_v)) {
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
         const uint32_t blck_size = ggml_blck_size(params.type_v);
         for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
             if (model->hparams.n_embd_head_v(il) % blck_size != 0) {
@@ -3645,7 +3688,7 @@ void llama_perf_context_reset(llama_context * ctx) {
 }
 
 void llama_memory_breakdown_print(const struct llama_context * ctx) {
-    const std::vector<ggml_backend_dev_t> & devices = ctx->get_model().devices;
+    const auto & devices = ctx->get_model().devices;
 
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown = ctx->memory_breakdown();
 
@@ -3681,7 +3724,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
         if (dev) {
             int i_dev = -1;
             for (size_t i = 0; i < devices.size(); i++) {
-                if (devices[i] == dev) {
+                if (devices[i].dev == dev) {
                     i_dev = i;
                     break;
                 }
@@ -3698,7 +3741,7 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
 
     // print memory breakdown for each device:
     for (size_t i = 0; i < devices.size(); i++) {
-        ggml_backend_dev_t          dev = devices[i];
+        ggml_backend_dev_t          dev = devices[i].dev;
         llama_memory_breakdown_data mb  = mb_dev[i];
 
         const std::string name = ggml_backend_dev_name(dev);
