@@ -1555,6 +1555,36 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
             return false;
         }
     }
+    // Populate visited_hash_set and use_counts for graph-level fusion support.
+    // Without this, the CUDA backend's fusion code (ggml_can_fuse_subgraph_ext)
+    // cannot determine use counts, preventing gate+up+SiLU kernel fusion.
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        ggml_tensor * node = graph->nodes[i];
+        if (!node) { continue; }
+
+        size_t hash_pos = ggml_hash_find(&graph->visited_hash_set, node);
+        if (hash_pos != GGML_HASHSET_FULL && !ggml_bitset_get(graph->visited_hash_set.used, hash_pos)) {
+            graph->visited_hash_set.keys[hash_pos] = node;
+            ggml_bitset_set(graph->visited_hash_set.used, hash_pos);
+            graph->use_counts[hash_pos] = 0;
+        }
+    }
+
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        ggml_tensor * node = graph->nodes[i];
+        if (!node) { continue; }
+
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            ggml_tensor * src = node->src[j];
+            if (!src) { continue; }
+
+            size_t src_pos = ggml_hash_find(&graph->visited_hash_set, src);
+            if (src_pos != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, src_pos)) {
+                graph->use_counts[src_pos]++;
+            }
+        }
+    }
+
     ggml_status status = ggml_backend_graph_compute(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
     stored_graphs[device].graph = graph;
