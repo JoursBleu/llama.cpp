@@ -117,7 +117,8 @@ class ModelBase:
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
                  disable_mistral_community_chat_template: bool = False,
                  sentence_transformers_dense_modules: bool = False,
-                 fuse_gate_up_exps: bool = False):
+                 fuse_gate_up_exps: bool = False,
+                 fuse_qkv: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -139,6 +140,10 @@ class ModelBase:
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
+        self.fuse_qkv = fuse_qkv
+        self._q_buffer: dict[int, Tensor] = {}
+        self._k_buffer: dict[int, Tensor] = {}
+        self._v_buffer: dict[int, Tensor] = {}
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -600,6 +605,34 @@ class ModelBase:
                self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
                 return []
 
+
+        # Handle Q/K/V tensor fusion if enabled
+        if self.fuse_qkv and bid is not None:
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid):
+                self._q_buffer[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid):
+                self._k_buffer[bid] = data_torch
+            elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid):
+                self._v_buffer[bid] = data_torch
+
+            # Check if all three Q, K, V are buffered for this layer
+            if bid in self._q_buffer and bid in self._k_buffer and bid in self._v_buffer:
+                q_data = self._q_buffer.pop(bid)
+                k_data = self._k_buffer.pop(bid)
+                v_data = self._v_buffer.pop(bid)
+                # Q shape: (n_embd_q, n_embd), K shape: (n_embd_k, n_embd), V shape: (n_embd_v, n_embd)
+                # concatenate to (n_embd_q + n_embd_k + n_embd_v, n_embd)
+                fused_data = torch.cat([q_data, k_data, v_data], dim=0)
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid)
+                logger.info(f"Fused Q, K, V into QKV for layer {bid}")
+                return [(fused_name, fused_data)]
+
+            # If we buffered a Q/K/V tensor, wait for the others
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid):
+                return []
+
         return [(new_name, data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
@@ -899,6 +932,32 @@ class ModelBase:
                 logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
 
                 self.gguf_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
+
+        # Flush any Q/K/V left in the fuse buffers (e.g. KV-shared layers that never see V).
+        # Emit them as plain ATTN_Q / ATTN_K / ATTN_V so the loader can fall back when
+        # ATTN_QKV is missing for that bid.
+        if self.fuse_qkv:
+            leftover_bids = set(self._q_buffer) | set(self._k_buffer) | set(self._v_buffer)
+            ftype_to_qtype = {
+                gguf.LlamaFileType.ALL_F32:     gguf.GGMLQuantizationType.F32,
+                gguf.LlamaFileType.MOSTLY_F16:  gguf.GGMLQuantizationType.F16,
+                gguf.LlamaFileType.MOSTLY_BF16: gguf.GGMLQuantizationType.BF16,
+                gguf.LlamaFileType.MOSTLY_Q8_0: gguf.GGMLQuantizationType.Q8_0,
+            }
+            data_qtype = ftype_to_qtype.get(self.ftype, gguf.GGMLQuantizationType.F16)
+            for bid in sorted(leftover_bids):
+                for buf, mt in (
+                    (self._q_buffer, gguf.MODEL_TENSOR.ATTN_Q),
+                    (self._k_buffer, gguf.MODEL_TENSOR.ATTN_K),
+                    (self._v_buffer, gguf.MODEL_TENSOR.ATTN_V),
+                ):
+                    if bid not in buf:
+                        continue
+                    t = buf.pop(bid).to(torch.float32).numpy()
+                    new_name = self.format_tensor_name(mt, bid)
+                    data = gguf.quants.quantize(t, data_qtype)
+                    logger.info(f"Un-fused leftover {new_name} (incomplete Q/K/V for layer {bid})")
+                    self.gguf_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
 
     def set_type(self):
         self.gguf_writer.add_type(gguf.GGUFType.MODEL)
@@ -13768,6 +13827,11 @@ def parse_args() -> argparse.Namespace:
         help="Fuse gate_exps and up_exps tensors into a single gate_up_exps tensor for MoE models.",
     )
 
+    parser.add_argument(
+        "--fuse-qkv", action="store_true",
+        help="Fuse separate Q, K, V weight tensors into a single QKV tensor.",
+    )
+
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
@@ -13912,7 +13976,8 @@ def main() -> None:
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template,
                                      sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
-                                     fuse_gate_up_exps=args.fuse_gate_up_exps
+                                     fuse_gate_up_exps=args.fuse_gate_up_exps,
+                                     fuse_qkv=args.fuse_qkv
                                      )
 
         if args.vocab_only:

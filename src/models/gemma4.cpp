@@ -70,9 +70,24 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         // note: use_alternative_attention (v_proj is optional, if it's not present, use k_proj)
-        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head * n_head}, 0);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k}, kv_flags);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v}, TENSOR_NOT_REQUIRED);
+        // Optional fused QKV (from converter --fuse-qkv). Only present on full attention layers
+        // (KV-shared layers have no V, so the converter cannot fuse them).
+        const int64_t n_embd_q = n_embd_head * n_head;
+        layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i),
+                                   {n_embd, n_embd_q + n_embd_k + n_embd_v},
+                                   TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
+        if (layer.wqkv) {
+            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd_q},
+                                     TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
+            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_k},
+                                     TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
+            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd_v},
+                                     TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
+        } else {
+            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_q}, 0);
+            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k}, kv_flags);
+            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v}, TENSOR_NOT_REQUIRED);
+        }
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head * n_head, n_embd}, 0);
 
         layer.attn_q_norm    = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), {n_embd_head}, 0);
@@ -187,35 +202,54 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             freq_factors = model.layers[il].rope_freqs;
         }
 
-        // Q projection (shared for both non-KV and KV layers)
-        // this is to mirror Gemma4Attention in pytorch code
-        ggml_tensor * Qcur;
-        {
+        // Q/K/V projection. When --fuse-qkv is used and the converter produced an
+        // ATTN_QKV tensor for this layer, do one matmul and slice the result; otherwise
+        // fall back to three separate matmuls. KV-shared layers are never fused.
+        ggml_tensor * Qcur = nullptr;
+        ggml_tensor * Kcur = nullptr;
+        ggml_tensor * Vcur = nullptr;
+        const int64_t n_embd_q_tot  = n_embd_head * n_head;
+        const int64_t n_embd_kv_tot = n_embd_head * n_head_kv;
+
+        if (model.layers[il].wqkv) {
+            ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
+            cb(qkv, "wqkv", il);
+
+            Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head, n_tokens,
+                ggml_row_size(qkv->type, n_embd_head), qkv->nb[1], 0);
+            Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens,
+                ggml_row_size(qkv->type, n_embd_head), qkv->nb[1],
+                ggml_row_size(qkv->type, n_embd_q_tot));
+            Vcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens,
+                ggml_row_size(qkv->type, n_embd_head), qkv->nb[1],
+                ggml_row_size(qkv->type, n_embd_q_tot + n_embd_kv_tot));
+        } else {
             Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
             cb(Qcur, "Qcur", il);
-
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-
-            Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
-            cb(Qcur, "Qcur_normed", il);
-
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
-            cb(Qcur, "Qcur_pos", il);
         }
+
+        Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+        cb(Qcur, "Qcur_normed", il);
+
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                             ext_factor, attn_factor, beta_fast, beta_slow);
+        cb(Qcur, "Qcur_pos", il);
 
         // self-attention
         if (hparams.has_kv(il)) {
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-            cb(Kcur, "Kcur", il);
+            if (!model.layers[il].wqkv) {
+                Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+                cb(Kcur, "Kcur", il);
 
-            ggml_tensor * Vcur = model.layers[il].wv
-                                    ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
-                                    : Kcur; // if v_proj is not present, use Kcur as Vcur
-            cb(Vcur, "Vcur", il);
+                Vcur = model.layers[il].wv
+                           ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
+                           : Kcur; // if v_proj is not present, use Kcur as Vcur
+                cb(Vcur, "Vcur", il);
 
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            }
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
             Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);

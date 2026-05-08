@@ -1085,6 +1085,12 @@ llm_graph_qkv llm_graph_context::build_qkv(
         if (layer.wqkv_b) {
             qkv = ggml_add(ctx0, qkv, layer.wqkv_b);
             cb(qkv, "wqkv_b", il);
+        } else if (layer.wq_b) {
+            // fused weights but separate biases (from --fuse-qkv conversion):
+            // concat wq_b+wk_b+wv_b and add
+            ggml_tensor * wqkv_b = ggml_concat(ctx0, layer.wq_b, ggml_concat(ctx0, layer.wk_b, layer.wv_b, 0), 0);
+            qkv = ggml_add(ctx0, qkv, wqkv_b);
+            cb(qkv, "wqkv_b", il);
         }
         if (hparams.f_clamp_kqv > 0.0f) {
             qkv = ggml_clamp(ctx0, qkv, -hparams.f_clamp_kqv, hparams.f_clamp_kqv);
