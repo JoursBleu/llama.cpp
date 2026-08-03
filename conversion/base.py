@@ -147,12 +147,9 @@ class ModelBase:
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
         self.fuse_qkv = fuse_qkv
-        self._q_buffer: dict[int, Tensor] = {}
-        self._k_buffer: dict[int, Tensor] = {}
-        self._v_buffer: dict[int, Tensor] = {}
-        self._q_bias_buffer: dict[int, Tensor] = {}
-        self._k_bias_buffer: dict[int, Tensor] = {}
-        self._v_bias_buffer: dict[int, Tensor] = {}
+        self._q_buffer: dict[int, tuple[str, str, Tensor]] = {}
+        self._k_buffer: dict[int, tuple[str, str, Tensor]] = {}
+        self._v_buffer: dict[int, tuple[str, str, Tensor]] = {}
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -645,28 +642,22 @@ class ModelBase:
                self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
                 return []
 
-        # Handle Q/K/V tensor fusion if enabled
+        # Handle Q/K/V weight fusion if enabled
         if self.fuse_qkv and bid is not None:
-            is_bias = name.endswith('.bias')
-            suffix = 'bias' if is_bias else 'weight'
-            buf_q = self._q_bias_buffer if is_bias else self._q_buffer
-            buf_k = self._k_bias_buffer if is_bias else self._k_buffer
-            buf_v = self._v_bias_buffer if is_bias else self._v_buffer
-
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid):
-                buf_q[bid] = data_torch
+                self._q_buffer[bid] = (name, new_name, data_torch)
             elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_K, bid):
-                buf_k[bid] = data_torch
+                self._k_buffer[bid] = (name, new_name, data_torch)
             elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_V, bid):
-                buf_v[bid] = data_torch
+                self._v_buffer[bid] = (name, new_name, data_torch)
 
-            if bid in buf_q and bid in buf_k and bid in buf_v:
-                q_data = buf_q.pop(bid)
-                k_data = buf_k.pop(bid)
-                v_data = buf_v.pop(bid)
+            if bid in self._q_buffer and bid in self._k_buffer and bid in self._v_buffer:
+                _, _, q_data = self._q_buffer.pop(bid)
+                _, _, k_data = self._k_buffer.pop(bid)
+                _, _, v_data = self._v_buffer.pop(bid)
                 fused_data = torch.cat([q_data, k_data, v_data], dim=0)
-                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid, suffix=suffix)
-                logger.info(f"Fused Q, K, V {suffix} into QKV for layer {bid}")
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid)
+                logger.info(f"Fused Q, K, V weights into QKV for layer {bid}")
                 return [(fused_name, fused_data)]
 
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.ATTN_Q, bid) or \
@@ -675,6 +666,17 @@ class ModelBase:
                 return []
 
         return [(new_name, data_torch)]
+
+    def flush_qkv_tensors(self) -> Iterator[tuple[str, str, Tensor]]:
+        pending = chain(self._q_buffer.values(), self._k_buffer.values(), self._v_buffer.values())
+        try:
+            for source_name, new_name, data_torch in pending:
+                logger.info(f"Keeping {new_name} separate because its Q/K/V group is incomplete")
+                yield source_name, new_name, data_torch
+        finally:
+            self._q_buffer.clear()
+            self._k_buffer.clear()
+            self._v_buffer.clear()
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del new_name, bid  # unused
@@ -897,7 +899,12 @@ class ModelBase:
         else:
             max_name_len = len("vision_encoder.weight,")  # Default reasonable length
 
-        for name, data_torch in chain(self.generate_extra_tensors(), self.get_tensors()):
+        regular_tensors = (
+            (name, None, data_torch)
+            for name, data_torch in chain(self.generate_extra_tensors(), self.get_tensors())
+        )
+        for source_name, mapped_name, data_torch in chain(regular_tensors, self.flush_qkv_tensors()):
+            name = mapped_name if mapped_name is not None else source_name
             # we don't need these
             if name.endswith((".attention.masked_bias", ".attention.bias", ".rotary_emb.inv_freq")):
                 continue
@@ -915,13 +922,14 @@ class ModelBase:
                     bid = int(part)
                     break
 
-            for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+            modified_tensors = [(name, data_torch)] if mapped_name is not None else self.modify_tensors(data_torch, name, bid)
+            for new_name, data_torch in modified_tensors:
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
 
                 n_dims = len(data.shape)
-                data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
+                data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(source_name, new_name, bid, n_dims)
 
                 # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
                 if n_dims <= 1 or new_name.endswith("_norm.weight"):

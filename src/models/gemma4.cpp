@@ -65,18 +65,16 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
         const int64_t n_embd_head = hparams.n_embd_head_k(i);
         const int64_t n_embd_k    = hparams.n_embd_k_gqa(i);
         const int64_t n_embd_v    = hparams.n_embd_v_gqa(i);
-        const int     kv_flags    = hparams.has_kv(i) ? 0 : TENSOR_NOT_REQUIRED;
 
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         // note: use_alternative_attention (v_proj is optional, if it's not present, use k_proj)
-        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head * n_head}, 0);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k}, kv_flags);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v}, TENSOR_NOT_REQUIRED);
+        // KV-shared layers have no K/V, and alternative-attention layers have no V.
+        create_tensor_qkv(layer, i, n_embd, n_embd_head * n_head, n_embd_k, n_embd_v, TENSOR_NOT_REQUIRED);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head * n_head, n_embd}, 0);
 
         layer.attn_q_norm    = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), {n_embd_head}, 0);
-        layer.attn_k_norm    = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM,    "weight", i), {n_embd_head}, kv_flags);
+        layer.attn_k_norm    = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM,    "weight", i), {n_embd_head}, hparams.has_kv(i) ? 0 : TENSOR_NOT_REQUIRED);
         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
 
         layer.out_scale = create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), {1u}, TENSOR_NOT_REQUIRED);
@@ -222,54 +220,42 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             freq_factors = model.layers[il].rope_freqs;
         }
 
-        // Q projection (shared for both non-KV and KV layers)
-        // this is to mirror Gemma4Attention in pytorch code
-        ggml_tensor * qkv_fused = nullptr;
-        ggml_tensor * Qcur;
-        if (model.layers[il].wqkv) {
-            qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
-            cb(qkv_fused, "wqkv", il);
-            const int64_t q_dim = n_embd_head * n_head;
-            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_tokens, qkv_fused->nb[1], 0));
-        } else {
+        ggml_tensor * Qcur = nullptr;
+        ggml_tensor * Kcur = nullptr;
+        ggml_tensor * Vcur = nullptr;
+
+        if (!hparams.has_kv(il)) {
+            // KV-shared layer: only Q is projected; K/V come from an earlier layer's cache.
             Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
-        }
-        {
             cb(Qcur, "Qcur", il);
-
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-
-            Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
-            cb(Qcur, "Qcur_normed", il);
-
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
-            cb(Qcur, "Qcur_pos", il);
+        } else if (model.layers[il].wqkv || model.layers[il].wv) {
+            auto qkv = build_qkv(model.layers[il], cur, n_embd_head, n_head, n_head_kv, il);
+            Qcur = qkv.q;
+            Kcur = qkv.k;
+            Vcur = qkv.v;
+        } else {
+            // Alternative attention: v_proj is absent, so reuse k_proj output as V.
+            Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
+            Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+            Vcur = Kcur;
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
+            cb(Vcur, "Vcur", il);
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
         }
+
+        Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+        cb(Qcur, "Qcur_normed", il);
+
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                             ext_factor, attn_factor, beta_fast, beta_slow);
+        cb(Qcur, "Qcur_pos", il);
 
         // self-attention
         if (hparams.has_kv(il)) {
-            ggml_tensor * Kcur;
-            ggml_tensor * Vcur;
-            if (qkv_fused) {
-                const int64_t q_dim = n_embd_head * n_head;
-                const int64_t k_dim = n_embd_head * n_head_kv;
-                const int64_t v_dim = n_embd_head * n_head_kv;
-                const size_t  esize = ggml_element_size(qkv_fused);
-                Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens, qkv_fused->nb[1], q_dim * esize));
-                Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens, qkv_fused->nb[1], (q_dim + k_dim) * esize));
-            } else {
-                Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-                Vcur = model.layers[il].wv
-                       ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
-                       : Kcur; // if v_proj is not present, use Kcur as Vcur
-            }
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
-
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
             Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
 
